@@ -1,0 +1,225 @@
+install.packages("shiny")
+install.packages("ggplot2")
+install.packages("randomForest")
+install.packages("plotly")
+
+library(shiny)
+library(ggplot2)
+library(randomForest)
+library(plotly)
+
+# Datos iniciales 
+datos <- data.frame(
+  Año = c(2018, 2019, 2020, 2021, 2022, 2023),
+  RoboAsalto = c(10775.04611, 9091.491694, 6898.511174, 6581.794345, 5688.70442, 6525.806699),
+  Extorsion = c(6542.041004, 5133.663142, 5160.375434, 5374.782648, 5055.584623, 5212.938229),
+  Fraude = c(5397.284025, 5088.682612, 5903.871052, 5906.526665, 5769.596358, 6962.345913)
+)
+
+# Años de predicción
+años_pred <- c(2024, 2025)
+
+# Función para transformar los datos en términos polinomiales
+transformar_datos_polinomial <- function(datos, variable, grado = 2, años_pred) {
+  modelo_poly <- lm(as.formula(paste(variable, "~ poly(Año, ", grado, ", raw = TRUE)", sep = "")), data = datos)
+  predicciones <- predict(modelo_poly, newdata = data.frame(Año = años_pred))
+  return(predicciones)
+}
+
+# Función para Bosques Aleatorios
+calcular_bosques_aleatorios <- function(datos, variable, años_pred) {
+  modelo_rf <- randomForest(as.formula(paste(variable, "~ Año")), data = datos, ntree = 100, mtry = 1)
+  predicciones <- predict(modelo_rf, newdata = data.frame(Año = años_pred))
+  return(predicciones)
+}
+
+datos_pred <- data.frame(
+  Año = años_pred,
+  RoboAsalto = NA,
+  Extorsion = NA,
+  Fraude = NA,
+  Prediccion_Polinomial_RoboAsalto = transformar_datos_polinomial(datos, "RoboAsalto", 2, años_pred),
+  Prediccion_RF_RoboAsalto = calcular_bosques_aleatorios(datos, "RoboAsalto", años_pred),
+  Prediccion_Polinomial_Extorsion = transformar_datos_polinomial(datos, "Extorsion", 2, años_pred),
+  Prediccion_RF_Extorsion = calcular_bosques_aleatorios(datos, "Extorsion", años_pred),
+  Prediccion_Polinomial_Fraude = transformar_datos_polinomial(datos, "Fraude", 2, años_pred),
+  Prediccion_RF_Fraude = calcular_bosques_aleatorios(datos, "Fraude", años_pred)
+)
+
+datos_completo <- rbind(
+  transform(datos, 
+            Prediccion_Polinomial_RoboAsalto = RoboAsalto, 
+            Prediccion_RF_RoboAsalto = RoboAsalto,
+            Prediccion_Polinomial_Extorsion = Extorsion, 
+            Prediccion_RF_Extorsion = Extorsion,
+            Prediccion_Polinomial_Fraude = Fraude, 
+            Prediccion_RF_Fraude = Fraude),
+  datos_pred
+)
+
+ui <- fluidPage(
+  titlePanel("Análisis de Incidencias Delictivas"),
+  sidebarLayout(
+    sidebarPanel(
+      h4("Modifica los datos para actualizar las predicciones:"),
+      fluidRow(
+        column(6, 
+          numericInput("robo_asalto_2024", "Robo o Asalto (2024):", value = round(datos_completo$Prediccion_RF_RoboAsalto[7], 2)),
+          numericInput("extorsion_2024", "Extorsión (2024):", value = round(datos_completo$Prediccion_RF_Extorsion[7], 2)),
+          numericInput("fraude_2024", "Fraude (2024):", value = round(datos_completo$Prediccion_RF_Fraude[7], 2))
+        ),
+        column(6, 
+          numericInput("robo_asalto_2025", "Robo o Asalto (2025):", value = round(datos_completo$Prediccion_RF_RoboAsalto[8], 2)),
+          numericInput("extorsion_2025", "Extorsión (2025):", value = round(datos_completo$Prediccion_RF_Extorsion[8], 2)),
+          numericInput("fraude_2025", "Fraude (2025):", value = round(datos_completo$Prediccion_RF_Fraude[8], 2))
+        )
+      ),
+      h4("Tabla de Datos Actualizados"),
+      tableOutput("tablaDatos")
+    ),
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Regresión Lineal Múltiple", plotOutput("regresionPlot")),
+        tabPanel("Predicción vs Valores Reales", plotlyOutput("prediccionPlot")),
+        tabPanel("Gráfico 3D", plotlyOutput("grafico3D", width = "100%", height = "600px")),
+        tabPanel("Regresión Polinomial - Robo o Asalto", plotlyOutput("graficoPolinomialRoboAsalto")),
+        tabPanel("Regresión Polinomial - Extorsión", plotlyOutput("graficoPolinomialExtorsion")),
+        tabPanel("Regresión Polinomial - Fraude", plotlyOutput("graficoPolinomialFraude")),
+        tabPanel("Bosques Aleatorios - Robo o Asalto", plotlyOutput("graficoBosquesRoboAsalto")),
+        tabPanel("Bosques Aleatorios - Extorsión", plotlyOutput("graficoBosquesExtorsion")),
+        tabPanel("Bosques Aleatorios - Fraude", plotlyOutput("graficoBosquesFraude"))
+      )
+    )
+  )
+)
+
+# Lógica del servidor (Server)
+server <- function(input, output) {
+  # Actualizar los datos con los inputs y predicciones
+  datos_actualizados <- reactive({
+    data <- datos
+    data[nrow(data) + 1, ] <- c(2024, input$robo_asalto_2024, input$extorsion_2024, input$fraude_2024)
+    data[nrow(data) + 1, ] <- c(2025, input$robo_asalto_2025, input$extorsion_2025, input$fraude_2025)
+    return(data)
+  })
+
+  # Mostrar tabla de datos actualizados
+  output$tablaDatos <- renderTable({
+    datos_actualizados()
+  })
+
+  # Gráfico de Regresión Lineal Múltiple con etiquetas en los puntos
+  output$regresionPlot <- renderPlot({
+    ggplot(datos_actualizados(), aes(x = Año)) +
+      geom_point(aes(y = RoboAsalto, color = "Robo o Asalto")) +
+      geom_text(aes(y = RoboAsalto, label = round(RoboAsalto, 2)), vjust = -1, color = "blue") +
+      geom_point(aes(y = Extorsion, color = "Extorsión")) +
+      geom_text(aes(y = Extorsion, label = round(Extorsion, 2)), vjust = -1, color = "red") +
+      geom_point(aes(y = Fraude, color = "Fraude")) +
+      geom_text(aes(y = Fraude, label = round(Fraude, 2)), vjust = -1, color = "green") +
+      geom_smooth(aes(y = RoboAsalto, color = "Robo o Asalto"), method = "lm", se = FALSE) +
+      geom_smooth(aes(y = Extorsion, color = "Extorsión"), method = "lm", se = FALSE) +
+      geom_smooth(aes(y = Fraude, color = "Fraude"), method = "lm", se = FALSE) +
+      labs(title = "Regresión Lineal Múltiple de Incidencias", x = "Año", y = "Número de Incidentes", color = "Tipo de Incidente") +
+      theme_minimal()
+  })
+
+  # Gráfico de Predicción vs Valores Reales sin etiquetas en los puntos
+  output$prediccionPlot <- renderPlotly({
+    plot_ly(datos_actualizados(), x = ~Año) %>%
+      add_trace(y = ~RoboAsalto, name = "Robo o Asalto", type = 'scatter', mode = 'lines+markers',
+                hoverinfo = "y", line = list(color = 'blue')) %>%
+      add_trace(y = ~Extorsion, name = "Extorsión", type = 'scatter', mode = 'lines+markers',
+                hoverinfo = "y", line = list(color = 'red')) %>%
+      add_trace(y = ~Fraude, name = "Fraude", type = 'scatter', mode = 'lines+markers',
+                hoverinfo = "y", line = list(color = 'green')) %>%
+      layout(
+        title = "Predicción vs Valores Reales",
+        xaxis = list(title = "Año"),
+        yaxis = list(title = "Número de Incidentes"),
+        legend = list(title = list(text = "<b>Tipo de Incidente</b>"))
+      )
+  })
+
+  # Gráfico 3D
+  output$grafico3D <- renderPlotly({
+    plot_ly(
+      x = datos_actualizados()$Año,
+      y = datos_actualizados()$RoboAsalto,
+      z = datos_actualizados()$Extorsion,
+      type = "scatter3d",
+      mode = "markers",
+      text = ~paste("Año:", datos_actualizados()$Año,
+                    "<br>Robo o Asalto:", datos_actualizados()$RoboAsalto,
+                    "<br>Extorsión:", datos_actualizados()$Extorsion,
+                    "<br>Fraude:", datos_actualizados()$Fraude),
+      marker = list(size = 5, color = "blue")
+    ) %>%
+      layout(
+        title = "Gráfico 3D de Incidencias",
+        scene = list(
+          xaxis = list(title = "Año"),
+          yaxis = list(title = "Robo o Asalto"),
+          zaxis = list(title = "Extorsión")
+        ),
+        margin = list(l = 0, r = 0, b = 0, t = 30)
+      )
+  })
+
+  # Gráficos de regresión polinomial y bosques aleatorios
+  output$graficoPolinomialRoboAsalto <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = RoboAsalto), color = "blue") +
+      geom_line(aes(y = Prediccion_Polinomial_RoboAsalto), color = "red") +
+      labs(title = "Regresión Polinomial de Robo o Asalto", x = "Año", y = "Robo o Asalto") +
+      theme_minimal()
+    ggplotly(p)
+  })
+
+  output$graficoPolinomialExtorsion <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = Extorsion), color = "blue") +
+      geom_line(aes(y = Prediccion_Polinomial_Extorsion), color = "red") +
+      labs(title = "Regresión Polinomial de Extorsión", x = "Año", y = "Extorsión") +
+      theme_minimal()
+    ggplotly(p)
+  })
+
+  output$graficoPolinomialFraude <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = Fraude), color = "blue") +
+      geom_line(aes(y = Prediccion_Polinomial_Fraude), color = "red") +
+      labs(title = "Regresión Polinomial de Fraude", x = "Año", y = "Fraude") +
+      theme_minimal()
+    ggplotly(p)
+  })
+
+  output$graficoBosquesRoboAsalto <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = RoboAsalto), color = "blue") +
+      geom_line(aes(y = Prediccion_RF_RoboAsalto), color = "green") +
+      labs(title = "Bosques Aleatorios para Robo o Asalto", x = "Año", y = "Robo o Asalto") +
+      theme_minimal()
+    ggplotly(p)
+  })
+
+  output$graficoBosquesExtorsion <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = Extorsion), color = "blue") +
+      geom_line(aes(y = Prediccion_RF_Extorsion), color = "green") +
+      labs(title = "Bosques Aleatorios para Extorsión", x = "Año", y = "Extorsión") +
+      theme_minimal()
+    ggplotly(p)
+  })
+
+  output$graficoBosquesFraude <- renderPlotly({
+    p <- ggplot(datos_completo, aes(x = Año)) +
+      geom_point(aes(y = Fraude), color = "blue") +
+      geom_line(aes(y = Prediccion_RF_Fraude), color = "green") +
+      labs(title = "Bosques Aleatorios para Fraude", x = "Año", y = "Fraude") +
+      theme_minimal()
+    ggplotly(p)
+  })
+}
+
+shinyApp(ui = ui, server = server)
